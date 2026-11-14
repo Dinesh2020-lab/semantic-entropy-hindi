@@ -14,23 +14,27 @@ from transformers import (AutoTokenizer, AutoModelForCausalLM,
 
 GEN_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 NLI_MODEL = "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"
-TRANSLATOR = "Helsinki-NLP/opus-mt-en-hi"  # quick baseline; swap for IndicTrans2 later
+TRANSLATOR = "facebook/nllb-200-distilled-600M"  # much better than opus-mt for Hindi
 
 def seed_all(s):
     random.seed(s); np.random.seed(s); torch.manual_seed(s)
 
 def translate_to_hindi(texts, batch_size=16):
-    from transformers import MarianMTModel, MarianTokenizer
-    tok = MarianTokenizer.from_pretrained(TRANSLATOR)
+    from transformers import AutoModelForSeq2SeqLM
+    tok = AutoTokenizer.from_pretrained(TRANSLATOR, src_lang="eng_Latn")
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    mt = MarianMTModel.from_pretrained(TRANSLATOR).to(dev).eval()
+    mt = AutoModelForSeq2SeqLM.from_pretrained(TRANSLATOR).to(dev).eval()
+    hin_id = tok.convert_tokens_to_ids("hin_Deva")
     out = []
     for i in range(0, len(texts), batch_size):
         batch = tok(texts[i:i + batch_size], return_tensors="pt", padding=True,
                     truncation=True, max_length=128).to(dev)
         with torch.no_grad():
-            gen = mt.generate(**batch, max_length=128)
+            gen = mt.generate(**batch, forced_bos_token_id=hin_id, max_length=128, num_beams=4)
         out += tok.batch_decode(gen, skip_special_tokens=True)
+    del mt
+    if dev == "cuda":
+        torch.cuda.empty_cache()
     return out
 
 def load_questions(n, lang, seed):
@@ -52,7 +56,7 @@ def build_prompt(tok, q, lang):
 @torch.no_grad()
 def generate(model, tok, prompt, n, temperature):
     inp = tok(prompt, return_tensors="pt").to(model.device)
-    kw = dict(max_new_tokens=32, pad_token_id=tok.eos_token_id)
+    kw = dict(max_new_tokens=64, pad_token_id=tok.eos_token_id)
     if temperature == 0:
         out = model.generate(**inp, do_sample=False, **kw)
     else:
