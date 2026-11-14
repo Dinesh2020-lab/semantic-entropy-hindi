@@ -19,15 +19,28 @@ TRANSLATOR = "Helsinki-NLP/opus-mt-en-hi"  # quick baseline; swap for IndicTrans
 def seed_all(s):
     random.seed(s); np.random.seed(s); torch.manual_seed(s)
 
+def translate_to_hindi(texts, batch_size=16):
+    from transformers import MarianMTModel, MarianTokenizer
+    tok = MarianTokenizer.from_pretrained(TRANSLATOR)
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    mt = MarianMTModel.from_pretrained(TRANSLATOR).to(dev).eval()
+    out = []
+    for i in range(0, len(texts), batch_size):
+        batch = tok(texts[i:i + batch_size], return_tensors="pt", padding=True,
+                    truncation=True, max_length=128).to(dev)
+        with torch.no_grad():
+            gen = mt.generate(**batch, max_length=128)
+        out += tok.batch_decode(gen, skip_special_tokens=True)
+    return out
+
 def load_questions(n, lang, seed):
     ds = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="validation")
     ds = ds.shuffle(seed=seed).select(range(n))
     qs = [{"q": r["question"], "gold": r["answer"]["value"]} for r in ds]
     if lang == "hi":
-        tr = pipeline("translation", model=TRANSLATOR, device=0 if torch.cuda.is_available() else -1)
-        out = tr([x["q"] for x in qs], max_length=128, batch_size=16)
-        for x, o in zip(qs, out):
-            x["q"] = o["translation_text"]
+        hi = translate_to_hindi([x["q"] for x in qs])
+        for x, h in zip(qs, hi):
+            x["q"] = h
     return qs
 
 def build_prompt(tok, q, lang):
