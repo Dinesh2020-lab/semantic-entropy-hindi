@@ -47,8 +47,8 @@ def load_questions(n, lang, seed):
             x["q"] = h
     return qs
 
-def build_prompt(tok, q, lang):
-    inst = ("Answer briefly in one short phrase." if lang == "en"
+def build_prompt(tok, q, lang, ans_lang):
+    inst = ("Answer briefly in one short phrase." if ans_lang == "en"
             else "संक्षेप में हिंदी में एक छोटे वाक्यांश में उत्तर दीजिए।")
     msgs = [{"role": "user", "content": f"{inst}\n\n{q}"}]
     return tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
@@ -96,8 +96,12 @@ def main():
     ap.add_argument("--n_questions", type=int, default=300)
     ap.add_argument("--n_samples", type=int, default=10)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--answer_lang", choices=["same", "en"], default="same",
+                    help="for --lang hi: answer in Hindi (same) or in English (en)")
     a = ap.parse_args()
     seed_all(a.seed)
+    ans_lang = "en" if (a.lang == "en" or a.answer_lang == "en") else "hi"
+    tag = a.lang + ("_ansen" if (a.lang == "hi" and ans_lang == "en") else "")
 
     tok = AutoTokenizer.from_pretrained(GEN_MODEL)
     model = AutoModelForCausalLM.from_pretrained(GEN_MODEL, torch_dtype=torch.float16, device_map="auto")
@@ -107,7 +111,7 @@ def main():
     qs = load_questions(a.n_questions, a.lang, a.seed)
     rows = []
     for i, x in enumerate(qs):
-        prompt = build_prompt(tok, x["q"], a.lang)
+        prompt = build_prompt(tok, x["q"], a.lang, ans_lang)
         main_ans = generate(model, tok, prompt, 1, 0)[0]
         samples = generate(model, tok, prompt, a.n_samples, 1.0)
         se, k = semantic_entropy(x["q"], samples, nli_tok, nli)
@@ -119,10 +123,10 @@ def main():
 
     y = [0 if r["correct"] else 1 for r in rows]  # 1 = hallucination
     se = [r["se"] for r in rows]
-    print(f"\nLang={a.lang} N={len(rows)} accuracy={1 - np.mean(y):.3f}")
+    print(f"\nSetting={tag} N={len(rows)} accuracy={1 - np.mean(y):.3f}")
     if len(set(y)) > 1:
         print(f"AUROC (semantic entropy -> detects wrong answers): {roc_auc_score(y, se):.3f}")
-    with open(f"results_{a.lang}_seed{a.seed}.jsonl", "w") as f:
+    with open(f"results_{tag}_seed{a.seed}.jsonl", "w") as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
